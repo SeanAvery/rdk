@@ -201,6 +201,9 @@ do_brew(){
 if [ "$(uname)" == "Linux" ]; then
 	if [ "$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2)" == "bullseye" ]; then
 		do_bullseye
+	elif [ "$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2)" == "focal" ]; then
+		do_linux
+
 	elif [ "$(uname -m)" == "x86_64" ]; then
 		do_linux
 	else

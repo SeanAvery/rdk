@@ -1,4 +1,4 @@
-//go:build linux && (arm64 || arm)
+//go:build Raspberry
 
 package pi
 
