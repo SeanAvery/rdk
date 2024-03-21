@@ -108,7 +108,7 @@ server: build-web
 
 server-static: build-web
 	rm -f $(BIN_OUTPUT_PATH)/viam-server
-	VIAM_STATIC_BUILD=1 GOFLAGS=$(GOFLAGS) go build $(LDFLAGS) -o $(BIN_OUTPUT_PATH)/viam-server web/cmd/server/main.go
+	VIAM_STATIC_BUILD=1 GOFLAGS=$(GOFLAGS) go build -tags no_cgo $(LDFLAGS) -o $(BIN_OUTPUT_PATH)/viam-server web/cmd/server/main.go
 
 server-static-compressed: server-static
 	upx --best --lzma $(BIN_OUTPUT_PATH)/viam-server
