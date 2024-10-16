@@ -195,3 +195,72 @@ func TestAudioTrackIsNotCreatedForVideoStream(t *testing.T) {
 	// camera should only create a video track. Assert the audio track does not exist.
 	test.That(t, conn.PeerConn().CurrentLocalDescription().SDP, test.ShouldNotContainSubstring, "m=audio")
 }
+
+// test handling stream options
+func TestGetSetStreamOptions(t *testing.T) {
+	logger := logging.NewTestLogger(t).Sublogger("TestGetSetStreamOptions")
+
+	origCfg := &config.Config{Components: []resource.Config{
+		{
+			Name:  "origCamera",
+			API:   resource.NewAPI("rdk", "component", "camera"),
+			Model: resource.DefaultModelFamily.WithModel("fake"),
+			ConvertedAttributes: &fake.Config{
+				Animated: true,
+				Width:    100,
+				Height:   50,
+			},
+		},
+	}}
+
+	// Create a robot with a single fake camera.
+	ctx, robot, addr, webSvc := setupRealRobot(t, origCfg, logger)
+
+	defer robot.Close(ctx)
+	defer webSvc.Close(ctx)
+
+	// Create a client connection to the robot. Disable direct GRPC to force a WebRTC
+	// connection. Fail if a WebRTC connection cannot be made.
+	conn, err := rgrpc.Dial(context.Background(), addr, logger.Sublogger("TestDial"), rpc.WithDisableDirectGRPC())
+	//nolint
+	defer conn.Close()
+	test.That(t, err, test.ShouldBeNil)
+
+	// Get a handle on the camera client named in the robot config.
+	cam, err := camera.NewClientFromConn(context.Background(), conn, "", camera.Named("origCamera"), logger)
+	test.That(t, err, test.ShouldBeNil)
+	defer cam.Close(ctx)
+
+	// Test that getting a single image succeeds.
+	_, _, err = cam.Images(ctx)
+	test.That(t, err, test.ShouldBeNil)
+
+	// Create a stream client. Listing the streams should give back a single stream named `origCamera`;
+	// after our component name.
+	livestreamClient := streampb.NewStreamServiceClient(conn)
+	listResp, err := livestreamClient.ListStreams(ctx, &streampb.ListStreamsRequest{})
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, listResp.Names, test.ShouldResemble, []string{"origCamera"})
+
+	// Assert there are no video/audio tracks on the peer connection.
+	test.That(t, conn.PeerConn().LocalDescription().SDP, test.ShouldNotContainSubstring, "m=video")
+	test.That(t, conn.PeerConn().LocalDescription().SDP, test.ShouldNotContainSubstring, "m=audio")
+
+	logger.Info("Adding stream `origCamera`")
+	// Call the `AddStream` endpoint to request that the server start
+	_, err = livestreamClient.AddStream(ctx, &streampb.AddStreamRequest{
+		Name: "origCamera",
+	})
+	test.That(t, err, test.ShouldBeNil)
+
+	testutils.WaitForAssertion(t, func(tb testing.TB) {
+		test.That(tb, conn.PeerConn().CurrentLocalDescription().SDP, test.ShouldContainSubstring, "m=video")
+	})
+
+	// call GetStreamOptions
+	getStreamOptionsResp, err := livestreamClient.GetStreamOptions(ctx, &streampb.GetStreamOptionsRequest{
+		Name: "origCamera",
+	})
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, getStreamOptionsResp, test.ShouldNotBeNil)
+}

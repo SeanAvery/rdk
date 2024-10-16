@@ -5,9 +5,7 @@ package web
 import (
 	"bytes"
 	"context"
-	"math"
 	"net/http"
-	"runtime"
 	"slices"
 	"sync"
 
@@ -16,7 +14,6 @@ import (
 	"go.viam.com/utils"
 	"go.viam.com/utils/rpc"
 
-	"go.viam.com/rdk/components/audioinput"
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/gostream"
 	"go.viam.com/rdk/logging"
@@ -49,8 +46,8 @@ func New(r robot.Robot, logger logging.Logger, opts ...Option) Service {
 		streamServer: nil,
 		services:     map[resource.API]resource.APIResourceCollection[resource.Resource]{},
 		opts:         wOpts,
-		videoSources: map[string]gostream.HotSwappableVideoSource{},
-		audioSources: map[string]gostream.HotSwappableAudioSource{},
+		// videoSources: map[string]gostream.HotSwappableVideoSource{},
+		// audioSources: map[string]gostream.HotSwappableAudioSource{},
 	}
 	return webSvc
 }
@@ -74,8 +71,8 @@ type webService struct {
 	webWorkers   sync.WaitGroup
 	modWorkers   sync.WaitGroup
 
-	videoSources map[string]gostream.HotSwappableVideoSource
-	audioSources map[string]gostream.HotSwappableAudioSource
+	// videoSources map[string]gostream.HotSwappableVideoSource
+	// audioSources map[string]gostream.HotSwappableAudioSource
 }
 
 func (svc *webService) streamInitialized() bool {
@@ -86,148 +83,222 @@ func (svc *webService) addNewStreams(ctx context.Context) error {
 	if !svc.streamInitialized() {
 		return nil
 	}
-	svc.refreshVideoSources()
-	svc.refreshAudioSources()
-	if svc.opts.streamConfig == nil {
-		if len(svc.videoSources) != 0 || len(svc.audioSources) != 0 {
-			svc.logger.Debug("not starting streams due to no stream config being set")
-		}
-		return nil
-	}
+	// svc.refreshVideoSources()
+	// svc.refreshAudioSources()
+	// if svc.opts.streamConfig == nil {
+	// 	if len(svc.videoSources) != 0 || len(svc.audioSources) != 0 {
+	// 		svc.logger.Debug("not starting streams due to no stream config being set")
+	// 	}
+	// 	return nil
+	// }
 
-	newStream := func(name string, isVideo bool) (gostream.Stream, bool, error) {
-		// Configure new stream
+	// newStream := func(name string, isVideo bool) (gostream.Stream, bool, error) {
+	// 	// Configure new stream
+	// 	config := gostream.StreamConfig{
+	// 		Name: name,
+	// 	}
+
+	// 	if isVideo {
+	// 		config.VideoEncoderFactory = svc.opts.streamConfig.VideoEncoderFactory
+	// 	} else {
+	// 		config.AudioEncoderFactory = svc.opts.streamConfig.AudioEncoderFactory
+	// 	}
+	// 	stream, err := svc.streamServer.Server.NewStream(config)
+
+	// 	// Skip if stream is already registered, otherwise raise any other errors
+	// 	var registeredError *webstream.StreamAlreadyRegisteredError
+	// 	if errors.As(err, &registeredError) {
+	// 		return nil, true, nil
+	// 	} else if err != nil {
+	// 		return nil, false, err
+	// 	}
+
+	// 	if !svc.streamServer.HasStreams {
+	// 		svc.streamServer.HasStreams = true
+	// 	}
+	// 	return stream, false, nil
+	// }
+
+	// for name, source := range svc.videoSources {
+	// 	const isVideo = true
+	// 	stream, alreadyRegistered, err := newStream(name, isVideo)
+	// 	if err != nil {
+	// 		return err
+	// 	} else if alreadyRegistered {
+	// 		continue
+	// 	}
+
+	// 	svc.startVideoStream(ctx, source, stream)
+	// }
+
+	// for name, source := range svc.audioSources {
+	// 	const isVideo = false
+	// 	stream, alreadyRegistered, err := newStream(name, isVideo)
+	// 	if err != nil {
+	// 		return err
+	// 	} else if alreadyRegistered {
+	// 		continue
+	// 	}
+
+	// 	svc.startAudioStream(ctx, source, stream)
+	// }
+	svc.streamServer.Server.RefreshVideoSources()
+	svc.streamServer.Server.RefreshAudioSources()
+
+	// Initialize streams for video sources
+	for name := range svc.streamServer.Server.VideoSources {
 		config := gostream.StreamConfig{
 			Name: name,
 		}
-
-		if isVideo {
-			config.VideoEncoderFactory = svc.opts.streamConfig.VideoEncoderFactory
-		} else {
-			config.AudioEncoderFactory = svc.opts.streamConfig.AudioEncoderFactory
-		}
+		config.VideoEncoderFactory = svc.opts.streamConfig.VideoEncoderFactory
 		stream, err := svc.streamServer.Server.NewStream(config)
-
-		// Skip if stream is already registered, otherwise raise any other errors
-		var registeredError *webstream.StreamAlreadyRegisteredError
-		if errors.As(err, &registeredError) {
-			return nil, true, nil
-		} else if err != nil {
-			return nil, false, err
-		}
-
-		if !svc.streamServer.HasStreams {
-			svc.streamServer.HasStreams = true
-		}
-		return stream, false, nil
-	}
-
-	for name, source := range svc.videoSources {
-		const isVideo = true
-		stream, alreadyRegistered, err := newStream(name, isVideo)
 		if err != nil {
 			return err
-		} else if alreadyRegistered {
-			continue
 		}
-
-		svc.startVideoStream(ctx, source, stream)
+		// start video stream
+		svc.startVideoStream(ctx, svc.streamServer.Server.VideoSources[name], stream)
 	}
 
-	for name, source := range svc.audioSources {
-		const isVideo = false
-		stream, alreadyRegistered, err := newStream(name, isVideo)
+	// Initialize streams for audio sources
+	for name := range svc.streamServer.Server.AudioSources {
+		config := gostream.StreamConfig{
+			Name: name,
+		}
+		config.AudioEncoderFactory = svc.opts.streamConfig.AudioEncoderFactory
+		stream, err := svc.streamServer.Server.NewStream(config)
 		if err != nil {
 			return err
-		} else if alreadyRegistered {
-			continue
 		}
-
-		svc.startAudioStream(ctx, source, stream)
+		// start audio stream
+		svc.startAudioStream(ctx, svc.streamServer.Server.AudioSources[name], stream)
 	}
 
 	return nil
 }
 
 func (svc *webService) makeStreamServer(ctx context.Context) (*StreamServer, error) {
-	svc.refreshVideoSources()
-	svc.refreshAudioSources()
-	var streams []gostream.Stream
-	var streamTypes []bool
-
-	if svc.opts.streamConfig == nil || (len(svc.videoSources) == 0 && len(svc.audioSources) == 0) {
-		if len(svc.videoSources) != 0 || len(svc.audioSources) != 0 {
-			svc.logger.Debug("not starting streams due to no stream config being set")
-		}
-		noopServer, err := webstream.NewServer(streams, svc.r, svc.logger.Sublogger("stream"))
-		return &StreamServer{noopServer, false}, err
-	}
-
-	addStream := func(streams []gostream.Stream, name string, isVideo bool) ([]gostream.Stream, error) {
-		config := gostream.StreamConfig{
-			Name: name,
-		}
-		if isVideo {
-			config.VideoEncoderFactory = svc.opts.streamConfig.VideoEncoderFactory
-
-			// set TargetFrameRate to the framerate of the video source if available
-			props, err := svc.videoSources[name].MediaProperties(ctx)
-			if err != nil {
-				svc.logger.Warnw("failed to get video source properties", "name", name, "error", err)
-			} else if props.FrameRate > 0.0 {
-				// round float up to nearest int
-				config.TargetFrameRate = int(math.Ceil(float64(props.FrameRate)))
-			}
-			// default to 60fps if the video source doesn't have a framerate
-			if config.TargetFrameRate == 0 {
-				config.TargetFrameRate = 60
-			}
-
-			if runtime.GOOS == "windows" {
-				// TODO(RSDK-1771): support video on windows
-				svc.logger.Warnw("not starting video stream since not supported on Windows yet", "name", name)
-				return streams, nil
-			}
-		} else {
-			config.AudioEncoderFactory = svc.opts.streamConfig.AudioEncoderFactory
-		}
-		stream, err := gostream.NewStream(config, svc.logger)
-		if err != nil {
-			return streams, err
-		}
-		return append(streams, stream), nil
-	}
-	for name := range svc.videoSources {
-		var err error
-		streams, err = addStream(streams, name, true)
-		if err != nil {
-			return nil, err
-		}
-		streamTypes = append(streamTypes, true)
-	}
-	for name := range svc.audioSources {
-		var err error
-		streams, err = addStream(streams, name, false)
-		if err != nil {
-			return nil, err
-		}
-		streamTypes = append(streamTypes, false)
-	}
-
-	streamServer, err := webstream.NewServer(streams, svc.r, svc.logger.Sublogger("stream"))
+	// Initialize stream server
+	// First, we need to check
+	// check if streamConfig is defined
+	// if svc.opts.streamConfig == nil {
+	// 	return nil, fmt.Errorf("streamConfig is not defined")
+	// }
+	server, err := webstream.NewServer(svc.r, svc.logger)
 	if err != nil {
 		return nil, err
 	}
+	// server.RefreshVideoSources()
+	// server.RefreshAudioSources()
 
-	for idx, stream := range streams {
-		if streamTypes[idx] {
-			svc.startVideoStream(ctx, svc.videoSources[stream.Name()], stream)
-		} else {
-			svc.startAudioStream(ctx, svc.audioSources[stream.Name()], stream)
-		}
-	}
+	// // Initialize streams for video sources
+	// for name := range svc.videoSources {
+	// 	config := gostream.StreamConfig{
+	// 		Name: name,
+	// 	}
+	// 	config.VideoEncoderFactory = svc.opts.streamConfig.VideoEncoderFactory
+	// 	stream, err := server.NewStream(config)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	// start video stream
+	// 	svc.startVideoStream(ctx, server.VideoSources[name], stream)
+	// }
 
-	return &StreamServer{streamServer, true}, nil
+	// // Initialize streams for audio sources
+	// for name := range svc.audioSources {
+	// 	config := gostream.StreamConfig{
+	// 		Name: name,
+	// 	}
+	// 	config.AudioEncoderFactory = svc.opts.streamConfig.AudioEncoderFactory
+	// 	stream, err := server.NewStream(config)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	// start audio stream
+	// 	svc.startAudioStream(ctx, server.AudioSources[name], stream)
+	// }
+
+	// TODO(seanp): check to make sure that sever has streams
+	return &StreamServer{server, false}, nil
+
+	// svc.refreshVideoSources()
+	// svc.refreshAudioSources()
+	// var streams []gostream.Stream
+	// var streamTypes []bool
+
+	// if svc.opts.streamConfig == nil || (len(svc.videoSources) == 0 && len(svc.audioSources) == 0) {
+	// 	if len(svc.videoSources) != 0 || len(svc.audioSources) != 0 {
+	// 		svc.logger.Debug("not starting streams due to no stream config being set")
+	// 	}
+	// 	noopServer, err := webstream.NewServer(streams, svc.r, svc.logger.Sublogger("stream"))
+	// 	return &StreamServer{noopServer, false}, err
+	// }
+
+	// addStream := func(streams []gostream.Stream, name string, isVideo bool) ([]gostream.Stream, error) {
+	// 	config := gostream.StreamConfig{
+	// 		Name: name,
+	// 	}
+	// 	if isVideo {
+	// 		config.VideoEncoderFactory = svc.opts.streamConfig.VideoEncoderFactory
+
+	// 		// set TargetFrameRate to the framerate of the video source if available
+	// 		props, err := svc.videoSources[name].MediaProperties(ctx)
+	// 		if err != nil {
+	// 			svc.logger.Warnw("failed to get video source properties", "name", name, "error", err)
+	// 		} else if props.FrameRate > 0.0 {
+	// 			// round float up to nearest int
+	// 			config.TargetFrameRate = int(math.Ceil(float64(props.FrameRate)))
+	// 		}
+	// 		// default to 60fps if the video source doesn't have a framerate
+	// 		if config.TargetFrameRate == 0 {
+	// 			config.TargetFrameRate = 60
+	// 		}
+
+	// 		if runtime.GOOS == "windows" {
+	// 			// TODO(RSDK-1771): support video on windows
+	// 			svc.logger.Warnw("not starting video stream since not supported on Windows yet", "name", name)
+	// 			return streams, nil
+	// 		}
+	// 	} else {
+	// 		config.AudioEncoderFactory = svc.opts.streamConfig.AudioEncoderFactory
+	// 	}
+	// 	stream, err := gostream.NewStream(config, svc.logger)
+	// 	if err != nil {
+	// 		return streams, err
+	// 	}
+	// 	return append(streams, stream), nil
+	// }
+	// for name := range svc.videoSources {
+	// 	var err error
+	// 	streams, err = addStream(streams, name, true)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	streamTypes = append(streamTypes, true)
+	// }
+	// for name := range svc.audioSources {
+	// 	var err error
+	// 	streams, err = addStream(streams, name, false)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	streamTypes = append(streamTypes, false)
+	// }
+
+	// streamServer, err := webstream.NewServer(streams, svc.r, svc.logger.Sublogger("stream"))
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// for idx, stream := range streams {
+	// 	if streamTypes[idx] {
+	// 		svc.startVideoStream(ctx, svc.videoSources[stream.Name()], stream)
+	// 	} else {
+	// 		svc.startAudioStream(ctx, svc.audioSources[stream.Name()], stream)
+	// 	}
+	// }
+
+	// return &StreamServer{streamServer, true}, nil
 }
 
 func (svc *webService) startStream(streamFunc func(opts *webstream.BackoffTuningOptions) error) {
@@ -280,38 +351,38 @@ func (svc *webService) startAudioStream(ctx context.Context, source gostream.Aud
 }
 
 // refreshVideoSources checks and initializes every possible video source that could be viewed from the robot.
-func (svc *webService) refreshVideoSources() {
-	for _, name := range camera.NamesFromRobot(svc.r) {
-		cam, err := camera.FromRobot(svc.r, name)
-		if err != nil {
-			continue
-		}
-		existing, ok := svc.videoSources[cam.Name().SDPTrackName()]
-		if ok {
-			existing.Swap(cam)
-			continue
-		}
-		newSwapper := gostream.NewHotSwappableVideoSource(cam)
-		svc.videoSources[cam.Name().SDPTrackName()] = newSwapper
-	}
-}
+// func (svc *webService) refreshVideoSources() {
+// 	for _, name := range camera.NamesFromRobot(svc.r) {
+// 		cam, err := camera.FromRobot(svc.r, name)
+// 		if err != nil {
+// 			continue
+// 		}
+// 		existing, ok := svc.videoSources[cam.Name().SDPTrackName()]
+// 		if ok {
+// 			existing.Swap(cam)
+// 			continue
+// 		}
+// 		newSwapper := gostream.NewHotSwappableVideoSource(cam)
+// 		svc.videoSources[cam.Name().SDPTrackName()] = newSwapper
+// 	}
+// }
 
-// refreshAudioSources checks and initializes every possible audio source that could be viewed from the robot.
-func (svc *webService) refreshAudioSources() {
-	for _, name := range audioinput.NamesFromRobot(svc.r) {
-		input, err := audioinput.FromRobot(svc.r, name)
-		if err != nil {
-			continue
-		}
-		existing, ok := svc.audioSources[input.Name().SDPTrackName()]
-		if ok {
-			existing.Swap(input)
-			continue
-		}
-		newSwapper := gostream.NewHotSwappableAudioSource(input)
-		svc.audioSources[input.Name().SDPTrackName()] = newSwapper
-	}
-}
+// // refreshAudioSources checks and initializes every possible audio source that could be viewed from the robot.
+// func (svc *webService) refreshAudioSources() {
+// 	for _, name := range audioinput.NamesFromRobot(svc.r) {
+// 		input, err := audioinput.FromRobot(svc.r, name)
+// 		if err != nil {
+// 			continue
+// 		}
+// 		existing, ok := svc.audioSources[input.Name().SDPTrackName()]
+// 		if ok {
+// 			existing.Swap(input)
+// 			continue
+// 		}
+// 		newSwapper := gostream.NewHotSwappableAudioSource(input)
+// 		svc.audioSources[input.Name().SDPTrackName()] = newSwapper
+// 	}
+// }
 
 // Update updates the web service when the robot has changed.
 func (svc *webService) Reconfigure(ctx context.Context, deps resource.Dependencies, _ resource.Config) error {
@@ -337,6 +408,11 @@ func (svc *webService) closeStreamServer() {
 func (svc *webService) initStreamServer(ctx context.Context, options *weboptions.Options) error {
 	var err error
 	svc.streamServer, err = svc.makeStreamServer(ctx)
+	if err != nil {
+		return err
+	}
+	// addNewStreams will start the streams
+	err = svc.addNewStreams(ctx)
 	if err != nil {
 		return err
 	}

@@ -45,13 +45,18 @@ type Server struct {
 	activePeerStreams       map[*webrtc.PeerConnection]map[string]*peerState
 	activeBackgroundWorkers sync.WaitGroup
 	isAlive                 bool
+
+	// streamConfig gostream.StreamConfig
+	VideoSources map[string]gostream.HotSwappableVideoSource
+	AudioSources map[string]gostream.HotSwappableAudioSource
 }
 
 // NewServer returns a server that will run on the given port and initially starts with the given
 // stream.
 func NewServer(
-	streams []gostream.Stream,
+	// streams []gostream.Stream,
 	robot robot.Robot,
+	// streamConfig gostream.StreamConfig,
 	logger logging.Logger,
 ) (*Server, error) {
 	closedCtx, closedFn := context.WithCancel(context.Background())
@@ -63,13 +68,16 @@ func NewServer(
 		nameToStreamState: map[string]*state.StreamState{},
 		activePeerStreams: map[*webrtc.PeerConnection]map[string]*peerState{},
 		isAlive:           true,
+		// streamConfig:      streamConfig,
+		VideoSources: map[string]gostream.HotSwappableVideoSource{},
+		AudioSources: map[string]gostream.HotSwappableAudioSource{},
 	}
 
-	for _, stream := range streams {
-		if err := server.add(stream); err != nil {
-			return nil, err
-		}
-	}
+	// for _, stream := range streams {
+	// 	if err := server.add(stream); err != nil {
+	// 		return nil, err
+	// 	}
+	// }
 	server.startMonitorCameraAvailable()
 
 	return server, nil
@@ -122,6 +130,8 @@ func (server *Server) ListStreams(ctx context.Context, req *streampb.ListStreams
 
 // AddStream implements part of the StreamServiceServer.
 func (server *Server) AddStream(ctx context.Context, req *streampb.AddStreamRequest) (*streampb.AddStreamResponse, error) {
+	// log hit to AddStream
+	server.logger.Warn("AddStream HIT")
 	ctx, span := trace.StartSpan(ctx, "stream::server::AddStream")
 	defer span.End()
 	// Get the peer connection to the caller.
@@ -263,6 +273,15 @@ func (server *Server) AddStream(ctx context.Context, req *streampb.AddStreamRequ
 		return nil, err
 	}
 
+	// fire off in the background
+	// wait 30 seconds
+	// then hit ResizeVideoSource
+	server.logger.Warn("ResizeVideoSource about to fire off")
+	go func() {
+		time.Sleep(30 * time.Second)
+		server.ResizeVideoSource(req.Name, 320, 240)
+	}()
+
 	guard.Success()
 	return &streampb.AddStreamResponse{}, nil
 }
@@ -316,6 +335,20 @@ func (server *Server) RemoveStream(ctx context.Context, req *streampb.RemoveStre
 
 	delete(server.activePeerStreams[pc], req.Name)
 	return &streampb.RemoveStreamResponse{}, nil
+}
+
+// GetStreamOptions implements part of the StreamServiceServer.
+func (server *Server) GetStreamOptions(ctx context.Context, req *streampb.GetStreamOptionsRequest) (*streampb.GetStreamOptionsResponse, error) {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	return &streampb.GetStreamOptionsResponse{}, nil
+}
+
+// SetStreamOptions implements part of the StreamServiceServer.
+func (server *Server) SetStreamOptions(ctx context.Context, req *streampb.SetStreamOptionsRequest) (*streampb.SetStreamOptionsResponse, error) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	return &streampb.SetStreamOptionsResponse{}, nil
 }
 
 // Close closes the Server and waits for spun off goroutines to complete.
@@ -418,5 +451,58 @@ func (server *Server) removeMissingStreams() {
 			delete(server.activePeerStreams[pc], camName)
 		}
 		utils.UncheckedError(streamState.Close())
+	}
+}
+
+// refreshVideoSources checks and initializes every possible video source that could be viewed from the robot.
+func (server *Server) RefreshVideoSources() {
+	for _, name := range camera.NamesFromRobot(server.robot) {
+		cam, err := camera.FromRobot(server.robot, name)
+		if err != nil {
+			continue
+		}
+		existing, ok := server.VideoSources[cam.Name().SDPTrackName()]
+		if ok {
+			existing.Swap(cam)
+			continue
+		}
+		newSwapper := gostream.NewHotSwappableVideoSource(cam)
+		server.VideoSources[cam.Name().SDPTrackName()] = newSwapper
+	}
+}
+
+// ResizeVideoSource resizes the video source with the given name.
+func (server *Server) ResizeVideoSource(name string, width, height int) error {
+	server.logger.Infow("Resizing video source", "name", name, "width", width, "height", height)
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	existing, ok := server.VideoSources[name]
+	if !ok {
+		server.logger.Error("video source not found")
+		return fmt.Errorf("video source %q not found", name)
+	}
+
+	resizer := gostream.NewResizeVideoSource(existing, width, height)
+	server.logger.Warn("Resizing video source with swap")
+	existing.Swap(resizer)
+
+	return nil
+}
+
+// refreshAudioSources checks and initializes every possible audio source that could be viewed from the robot.
+func (server *Server) RefreshAudioSources() {
+	for _, name := range audioinput.NamesFromRobot(server.robot) {
+		input, err := audioinput.FromRobot(server.robot, name)
+		if err != nil {
+			continue
+		}
+		existing, ok := server.AudioSources[input.Name().SDPTrackName()]
+		if ok {
+			existing.Swap(input)
+			continue
+		}
+		newSwapper := gostream.NewHotSwappableAudioSource(input)
+		server.AudioSources[input.Name().SDPTrackName()] = newSwapper
 	}
 }
