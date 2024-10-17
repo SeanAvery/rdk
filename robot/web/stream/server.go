@@ -3,6 +3,7 @@ package webstream
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -46,7 +47,8 @@ type Server struct {
 	activeBackgroundWorkers sync.WaitGroup
 	isAlive                 bool
 
-	// streamConfig gostream.StreamConfig
+	streamConfig gostream.StreamConfig
+	webWorkers   sync.WaitGroup
 	VideoSources map[string]gostream.HotSwappableVideoSource
 	AudioSources map[string]gostream.HotSwappableAudioSource
 }
@@ -56,7 +58,7 @@ type Server struct {
 func NewServer(
 	// streams []gostream.Stream,
 	robot robot.Robot,
-	// streamConfig gostream.StreamConfig,
+	streamConfig gostream.StreamConfig,
 	logger logging.Logger,
 ) (*Server, error) {
 	closedCtx, closedFn := context.WithCancel(context.Background())
@@ -68,9 +70,9 @@ func NewServer(
 		nameToStreamState: map[string]*state.StreamState{},
 		activePeerStreams: map[*webrtc.PeerConnection]map[string]*peerState{},
 		isAlive:           true,
-		// streamConfig:      streamConfig,
-		VideoSources: map[string]gostream.HotSwappableVideoSource{},
-		AudioSources: map[string]gostream.HotSwappableAudioSource{},
+		streamConfig:      streamConfig,
+		VideoSources:      map[string]gostream.HotSwappableVideoSource{},
+		AudioSources:      map[string]gostream.HotSwappableAudioSource{},
 	}
 
 	// for _, stream := range streams {
@@ -95,6 +97,7 @@ func (e *StreamAlreadyRegisteredError) Error() string {
 
 // NewStream informs the stream server of new streams that are capable of being streamed.
 func (server *Server) NewStream(config gostream.StreamConfig) (gostream.Stream, error) {
+	server.logger.Infow("Adding new stream", "name", config.Name)
 	server.mu.Lock()
 	defer server.mu.Unlock()
 
@@ -276,10 +279,10 @@ func (server *Server) AddStream(ctx context.Context, req *streampb.AddStreamRequ
 	// fire off in the background
 	// wait 30 seconds
 	// then hit ResizeVideoSource
-	server.logger.Warn("ResizeVideoSource about to fire off")
 	go func() {
-		time.Sleep(30 * time.Second)
-		server.ResizeVideoSource(req.Name, 320, 240)
+		time.Sleep(10 * time.Second)
+		server.logger.Warn("ResizeVideoSource about to fire off")
+		server.ResizeVideoSource(ctx, req.Name, 320, 240)
 	}()
 
 	guard.Success()
@@ -472,7 +475,7 @@ func (server *Server) RefreshVideoSources() {
 }
 
 // ResizeVideoSource resizes the video source with the given name.
-func (server *Server) ResizeVideoSource(name string, width, height int) error {
+func (server *Server) ResizeVideoSource(ctx context.Context, name string, width, height int) error {
 	server.logger.Infow("Resizing video source", "name", name, "width", width, "height", height)
 	server.mu.Lock()
 	defer server.mu.Unlock()
@@ -482,10 +485,34 @@ func (server *Server) ResizeVideoSource(name string, width, height int) error {
 		server.logger.Error("video source not found")
 		return fmt.Errorf("video source %q not found", name)
 	}
-
-	resizer := gostream.NewResizeVideoSource(existing, width, height)
+	// get camera from robot
+	cam, err := camera.FromRobot(server.robot, name)
+	if err != nil {
+		server.logger.Errorw("error getting camera from robot", "error", err)
+		return err
+	}
+	resizer := gostream.NewResizeVideoSource(cam, width, height)
 	server.logger.Warn("Resizing video source with swap")
 	existing.Swap(resizer)
+
+	config := gostream.StreamConfig{
+		Name: name,
+	}
+	config.VideoEncoderFactory = server.streamConfig.VideoEncoderFactory
+	// stream, err := gostream.NewStream(config, server.logger)
+	// if err != nil {
+	// 	server.logger.Errorw("error creating new stream", "error", err)
+	// 	return err
+	// }
+	stream, err := server.NewStream(config)
+	if err != nil {
+		server.logger.Errorw("error creating new stream", "error", err)
+		return err
+	}
+
+	server.logger.Warn("Starting video stream")
+	// server.StartVideoStream(context.Background(), resizer, stream)
+	server.StartVideoStream(ctx, server.VideoSources[name], stream)
 
 	return nil
 }
@@ -505,4 +532,67 @@ func (server *Server) RefreshAudioSources() {
 		newSwapper := gostream.NewHotSwappableAudioSource(input)
 		server.AudioSources[input.Name().SDPTrackName()] = newSwapper
 	}
+}
+
+// InitStream creates and starts stream for a given stream name.
+// func (server *Server) InitStream(ctx context.Context, streamName string) error {
+// 	server.mu.Lock()
+// 	defer server.mu.Unlock()
+
+// 	streamState, ok := server.nameToStreamState[streamName]
+// 	if !ok {
+// 		return errors.Errorf("stream %q not found", streamName)
+// 	}
+
+// 	return streamState.Init(ctx)
+// }
+
+func (server *Server) StartVideoStream(ctx context.Context, source gostream.VideoSource, stream gostream.Stream) {
+	server.logger.Infow("Starting video stream", "name", stream.Name())
+	server.startStream(func(opts *BackoffTuningOptions) error {
+		streamVideoCtx, _ := utils.MergeContext(server.closedCtx, ctx)
+		// Use H264 for cameras that support it; but do not override upstream values.
+		if props, err := server.propertiesFromStream(ctx, stream); err == nil && slices.Contains(props.MimeTypes, rutils.MimeTypeH264) {
+			streamVideoCtx = gostream.WithMIMETypeHint(streamVideoCtx, rutils.WithLazyMIMEType(rutils.MimeTypeH264))
+		}
+
+		return StreamVideoSource(streamVideoCtx, source, stream, opts, server.logger)
+	})
+}
+
+func (server *Server) StartAudioStream(ctx context.Context, source gostream.AudioSource, stream gostream.Stream) {
+	server.startStream(func(opts *BackoffTuningOptions) error {
+		// Merge ctx that may be coming from a Reconfigure.
+		streamAudioCtx, _ := utils.MergeContext(server.closedCtx, ctx)
+		return StreamAudioSource(streamAudioCtx, source, stream, opts, server.logger)
+	})
+}
+
+func (server *Server) propertiesFromStream(ctx context.Context, stream gostream.Stream) (camera.Properties, error) {
+	res, err := server.robot.ResourceByName(camera.Named(stream.Name()))
+	if err != nil {
+		return camera.Properties{}, err
+	}
+
+	cam, ok := res.(camera.Camera)
+	if !ok {
+		return camera.Properties{}, errors.Errorf("cannot convert resource (type %T) to type (%T)", res, camera.Camera(nil))
+	}
+
+	return cam.Properties(ctx)
+}
+
+func (server *Server) startStream(streamFunc func(opts *BackoffTuningOptions) error) {
+	waitCh := make(chan struct{})
+	server.webWorkers.Add(1)
+	utils.PanicCapturingGo(func() {
+		defer server.webWorkers.Done()
+		close(waitCh)
+		if err := streamFunc(&BackoffTuningOptions{}); err != nil {
+			if utils.FilterOutError(err, context.Canceled) != nil {
+				server.logger.Errorw("error streaming", "error", err)
+			}
+		}
+	})
+	<-waitCh
 }

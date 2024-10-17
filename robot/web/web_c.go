@@ -6,12 +6,10 @@ import (
 	"bytes"
 	"context"
 	"net/http"
-	"slices"
 	"sync"
 
 	"github.com/pkg/errors"
 	streampb "go.viam.com/api/stream/v1"
-	"go.viam.com/utils"
 	"go.viam.com/utils/rpc"
 
 	"go.viam.com/rdk/components/camera"
@@ -21,7 +19,6 @@ import (
 	"go.viam.com/rdk/robot"
 	weboptions "go.viam.com/rdk/robot/web/options"
 	webstream "go.viam.com/rdk/robot/web/stream"
-	rutils "go.viam.com/rdk/utils"
 )
 
 // StreamServer manages streams and displays.
@@ -156,7 +153,8 @@ func (svc *webService) addNewStreams(ctx context.Context) error {
 			return err
 		}
 		// start video stream
-		svc.startVideoStream(ctx, svc.streamServer.Server.VideoSources[name], stream)
+		// svc.startVideoStream(ctx, svc.streamServer.Server.VideoSources[name], stream)
+		svc.streamServer.Server.StartVideoStream(ctx, svc.streamServer.Server.VideoSources[name], stream)
 	}
 
 	// Initialize streams for audio sources
@@ -170,7 +168,7 @@ func (svc *webService) addNewStreams(ctx context.Context) error {
 			return err
 		}
 		// start audio stream
-		svc.startAudioStream(ctx, svc.streamServer.Server.AudioSources[name], stream)
+		svc.streamServer.Server.StartAudioStream(ctx, svc.streamServer.Server.AudioSources[name], stream)
 	}
 
 	return nil
@@ -183,7 +181,7 @@ func (svc *webService) makeStreamServer(ctx context.Context) (*StreamServer, err
 	// if svc.opts.streamConfig == nil {
 	// 	return nil, fmt.Errorf("streamConfig is not defined")
 	// }
-	server, err := webstream.NewServer(svc.r, svc.logger)
+	server, err := webstream.NewServer(svc.r, *svc.opts.streamConfig, svc.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -301,20 +299,20 @@ func (svc *webService) makeStreamServer(ctx context.Context) (*StreamServer, err
 	// return &StreamServer{streamServer, true}, nil
 }
 
-func (svc *webService) startStream(streamFunc func(opts *webstream.BackoffTuningOptions) error) {
-	waitCh := make(chan struct{})
-	svc.webWorkers.Add(1)
-	utils.PanicCapturingGo(func() {
-		defer svc.webWorkers.Done()
-		close(waitCh)
-		if err := streamFunc(&webstream.BackoffTuningOptions{}); err != nil {
-			if utils.FilterOutError(err, context.Canceled) != nil {
-				svc.logger.Errorw("error streaming", "error", err)
-			}
-		}
-	})
-	<-waitCh
-}
+// func (svc *webService) startStream(streamFunc func(opts *webstream.BackoffTuningOptions) error) {
+// 	waitCh := make(chan struct{})
+// 	svc.webWorkers.Add(1)
+// 	utils.PanicCapturingGo(func() {
+// 		defer svc.webWorkers.Done()
+// 		close(waitCh)
+// 		if err := streamFunc(&webstream.BackoffTuningOptions{}); err != nil {
+// 			if utils.FilterOutError(err, context.Canceled) != nil {
+// 				svc.logger.Errorw("error streaming", "error", err)
+// 			}
+// 		}
+// 	})
+// 	<-waitCh
+// }
 
 func (svc *webService) propertiesFromStream(ctx context.Context, stream gostream.Stream) (camera.Properties, error) {
 	res, err := svc.r.ResourceByName(camera.Named(stream.Name()))
@@ -330,25 +328,25 @@ func (svc *webService) propertiesFromStream(ctx context.Context, stream gostream
 	return cam.Properties(ctx)
 }
 
-func (svc *webService) startVideoStream(ctx context.Context, source gostream.VideoSource, stream gostream.Stream) {
-	svc.startStream(func(opts *webstream.BackoffTuningOptions) error {
-		streamVideoCtx, _ := utils.MergeContext(svc.cancelCtx, ctx)
-		// Use H264 for cameras that support it; but do not override upstream values.
-		if props, err := svc.propertiesFromStream(ctx, stream); err == nil && slices.Contains(props.MimeTypes, rutils.MimeTypeH264) {
-			streamVideoCtx = gostream.WithMIMETypeHint(streamVideoCtx, rutils.WithLazyMIMEType(rutils.MimeTypeH264))
-		}
+// func (svc *webService) startVideoStream(ctx context.Context, source gostream.VideoSource, stream gostream.Stream) {
+// 	svc.startStream(func(opts *webstream.BackoffTuningOptions) error {
+// 		streamVideoCtx, _ := utils.MergeContext(svc.cancelCtx, ctx)
+// 		// Use H264 for cameras that support it; but do not override upstream values.
+// 		if props, err := svc.propertiesFromStream(ctx, stream); err == nil && slices.Contains(props.MimeTypes, rutils.MimeTypeH264) {
+// 			streamVideoCtx = gostream.WithMIMETypeHint(streamVideoCtx, rutils.WithLazyMIMEType(rutils.MimeTypeH264))
+// 		}
 
-		return webstream.StreamVideoSource(streamVideoCtx, source, stream, opts, svc.logger)
-	})
-}
+// 		return webstream.StreamVideoSource(streamVideoCtx, source, stream, opts, svc.logger)
+// 	})
+// }
 
-func (svc *webService) startAudioStream(ctx context.Context, source gostream.AudioSource, stream gostream.Stream) {
-	svc.startStream(func(opts *webstream.BackoffTuningOptions) error {
-		// Merge ctx that may be coming from a Reconfigure.
-		streamAudioCtx, _ := utils.MergeContext(svc.cancelCtx, ctx)
-		return webstream.StreamAudioSource(streamAudioCtx, source, stream, opts, svc.logger)
-	})
-}
+// func (svc *webService) startAudioStream(ctx context.Context, source gostream.AudioSource, stream gostream.Stream) {
+// 	svc.startStream(func(opts *webstream.BackoffTuningOptions) error {
+// 		// Merge ctx that may be coming from a Reconfigure.
+// 		streamAudioCtx, _ := utils.MergeContext(svc.cancelCtx, ctx)
+// 		return webstream.StreamAudioSource(streamAudioCtx, source, stream, opts, svc.logger)
+// 	})
+// }
 
 // refreshVideoSources checks and initializes every possible video source that could be viewed from the robot.
 // func (svc *webService) refreshVideoSources() {
