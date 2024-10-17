@@ -495,24 +495,24 @@ func (server *Server) ResizeVideoSource(ctx context.Context, name string, width,
 	server.logger.Warn("Resizing video source with swap")
 	existing.Swap(resizer)
 
-	config := gostream.StreamConfig{
-		Name: name,
-	}
-	config.VideoEncoderFactory = server.streamConfig.VideoEncoderFactory
-	// stream, err := gostream.NewStream(config, server.logger)
+	// config := gostream.StreamConfig{
+	// 	Name: name,
+	// }
+	// config.VideoEncoderFactory = server.streamConfig.VideoEncoderFactory
+	// // stream, err := gostream.NewStream(config, server.logger)
+	// // if err != nil {
+	// // 	server.logger.Errorw("error creating new stream", "error", err)
+	// // 	return err
+	// // }
+	// stream, err := server.NewStream(config)
 	// if err != nil {
 	// 	server.logger.Errorw("error creating new stream", "error", err)
 	// 	return err
 	// }
-	stream, err := server.NewStream(config)
-	if err != nil {
-		server.logger.Errorw("error creating new stream", "error", err)
-		return err
-	}
 
-	server.logger.Warn("Starting video stream")
-	// server.StartVideoStream(context.Background(), resizer, stream)
-	server.StartVideoStream(ctx, server.VideoSources[name], stream)
+	// server.logger.Warn("Starting video stream")
+	// // server.StartVideoStream(context.Background(), resizer, stream)
+	// server.StartVideoStream(ctx, server.VideoSources[name], stream)
 
 	return nil
 }
